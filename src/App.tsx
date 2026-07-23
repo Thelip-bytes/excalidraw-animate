@@ -37,14 +37,20 @@ type Theme = 'light' | 'dark';
 
 const App = () => {
   const [mode, setMode] = useState<ViewMode>('animate');
-  const [theme, setTheme] = useState<Theme>(
-    () => (localStorage.getItem('theme') as Theme | null) ?? 'light',
-  );
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = window.localStorage?.getItem?.('theme') as Theme | null;
+      if (saved) return saved;
+    }
+    return 'light';
+  });
 
   useEffect(() => {
     document.documentElement.classList.remove('light', 'dark');
     document.documentElement.classList.add(theme);
-    localStorage.setItem('theme', theme);
+    if (typeof window !== 'undefined') {
+      window.localStorage?.setItem?.('theme', theme);
+    }
   }, [theme]);
 
   const toggleMode = () => {

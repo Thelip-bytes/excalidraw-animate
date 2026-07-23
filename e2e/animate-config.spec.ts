@@ -3,7 +3,7 @@ import { STORAGE_KEY, createDrawing } from './testHelpers';
 
 async function openAnimatePanel(page: Page) {
   // Open the Animate Panel sidebar if not already open
-  const animationHeading = page.getByText('Animation');
+  const animationHeading = page.getByText(/Animation Timing|Animation/);
   const isVisible = await animationHeading.isVisible().catch(() => false);
   if (!isVisible) {
     // First, close any open sidebar (like library)
@@ -60,9 +60,9 @@ test.describe('AnimateConfig', () => {
   });
 
   test('CFG-003: Inputs disabled when no selection', async ({ page }) => {
-    const orderInput = page.locator('input[title="Set animation order"]');
+    const orderInput = page.locator('input[title*="animation order"]');
     const durationInput = page.locator(
-      'input[title="Set animation duration in milliseconds"]',
+      'input[title*="duration for selected elements"]',
     );
 
     // Both inputs should be disabled when no element is selected
@@ -131,11 +131,11 @@ test.describe('AnimateConfig - No Data', () => {
     await openAnimatePanel(page);
 
     // AnimateConfig sections should still be visible
-    await expect(page.getByText('Animation')).toBeVisible();
+    await expect(page.getByText(/Animation Timing|Animation/)).toBeVisible();
     await expect(page.getByText('Pointer')).toBeVisible();
 
     // Inputs should be disabled (no elements to select)
-    const orderInput = page.locator('input[title="Set animation order"]');
+    const orderInput = page.locator('input[title*="animation order"]');
     await expect(orderInput).toBeDisabled();
   });
 });
