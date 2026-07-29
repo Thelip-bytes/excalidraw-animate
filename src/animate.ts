@@ -570,10 +570,6 @@ const patchSvgImage = (
         }
       });
 
-    // Make the element itself visible immediately (no SMIL fade-in)
-    ele.removeAttribute('opacity');
-    ele.style.opacity = '1';
-
     // Make the foreignObject and its content visible
     (embedMedia as SVGElement).style.opacity = '1';
     (embedMedia as SVGElement).style.display = 'block';
@@ -584,21 +580,6 @@ const patchSvgImage = (
       if (w) embedMedia.setAttribute('width', w);
       if (h) embedMedia.setAttribute('height', h);
     }
-
-    // Walk up ALL ancestor <g> elements and force them visible.
-    // Any ancestor with opacity=0.0 (set by patchSvgImage for other elements)
-    // will hide the entire embed subtree.
-    let ancestor: Element | null = ele;
-    while (ancestor && ancestor !== svg) {
-      if (ancestor.tagName === 'g' || ancestor.tagName === 'a') {
-        ancestor.removeAttribute('opacity');
-        (ancestor as SVGElement).style.opacity = '1';
-        (ancestor as SVGElement).style.display = '';
-      }
-      ancestor = ancestor.parentElement;
-    }
-
-    return;
   }
 
   const toOpacity = ele.getAttribute('opacity') || '1.0';
