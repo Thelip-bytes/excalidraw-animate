@@ -548,6 +548,7 @@ const patchSvgImage = (
   ele: SVGElement,
   currentMs: number,
   durationMs: number,
+  placeholderNodes: SVGElement[] = [],
 ) => {
   const parentAnchor =
     ele.tagName.toLowerCase() === 'a' ? ele : ele.closest('a');
@@ -558,17 +559,12 @@ const patchSvgImage = (
   );
 
   if (embedMedia) {
-    // Hide the placeholder link text (e.g. "https://giphy.com/...")
-    container
-      .querySelectorAll('text, tspan, .excalidraw-embeddable-link')
-      .forEach((textNode) => {
-        const textG = textNode.closest('g');
-        if (textG && !textG.contains(embedMedia)) {
-          (textG as SVGElement).style.display = 'none';
-        } else {
-          (textNode as SVGElement).style.display = 'none';
-        }
-      });
+    // Excalidraw renders an embed as a border, fallback link text, and the
+    // foreignObject in separate sibling nodes. Only the foreignObject belongs
+    // to the animated element; hide the supplied fallback siblings.
+    placeholderNodes.forEach((node) => {
+      node.style.display = 'none';
+    });
 
     // Make the foreignObject and its content visible
     (embedMedia as SVGElement).style.opacity = '1';
@@ -630,23 +626,16 @@ const patchSvgEle = (
 };
 
 const createGroups = (
-  svg: SVGSVGElement,
+  nodeToElement: ReadonlyMap<SVGElement, NonDeletedExcalidrawElement>,
   elements: readonly NonDeletedExcalidrawElement[],
 ) => {
   const groups: { [groupId: string]: (readonly [SVGElement, number])[] } = {};
-  let index = 0;
-  const childNodes = svg.childNodes as NodeListOf<SVGElement>;
-  childNodes.forEach((ele) => {
-    if (ele.tagName === 'g') {
-      if (elements[index]) {
-        const { groupIds } = elements[index];
-        if (groupIds && groupIds.length >= 1) {
-          const groupId = groupIds[0];
-          groups[groupId] = groups[groupId] || [];
-          groups[groupId].push([ele, index] as const);
-        }
-      }
-      index += 1;
+  nodeToElement.forEach((element, ele) => {
+    const { groupIds } = element;
+    if (groupIds && groupIds.length >= 1) {
+      const groupId = groupIds[0];
+      groups[groupId] = groups[groupId] || [];
+      groups[groupId].push([ele, elements.indexOf(element)] as const);
     }
   });
   return groups;
@@ -654,7 +643,10 @@ const createGroups = (
 
 const filterGroupNodes = (nodes: NodeListOf<SVGElement>) =>
   [...nodes].filter(
-    (node) => node.tagName === 'g' || node.tagName === 'use' /* for images */,
+    (node) =>
+      node.tagName === 'g' ||
+      node.tagName === 'use' || // images
+      node.tagName === 'a', // linked elements, including web embeds
   );
 
 const extractNumberFromElement = (
@@ -665,48 +657,106 @@ const extractNumberFromElement = (
   return (match && Number(match[1])) || 0;
 };
 
-const sortSvgNodes = (
-  nodes: SVGElement[],
+type AnimatedNode = {
+  node: SVGElement;
+  element: NonDeletedExcalidrawElement;
+  placeholderNodes: SVGElement[];
+};
+
+const isEmbedSvgNode = (node: SVGElement): boolean =>
+  !!node.querySelector('foreignObject') ||
+  (node.tagName === 'a' && !!node.querySelector('image'));
+
+const createAnimatedNodes = (
+  svg: SVGSVGElement,
   elements: readonly NonDeletedExcalidrawElement[],
-) =>
-  [...nodes].sort((a, b) => {
-    const aIndex = nodes.indexOf(a);
-    const bIndex = nodes.indexOf(b);
-    const aEl = elements[aIndex];
-    const bEl = elements[bIndex];
-    const aOrder = aEl ? extractNumberFromElement(aEl, 'animateOrder') : 0;
-    const bOrder = bEl ? extractNumberFromElement(bEl, 'animateOrder') : 0;
-    return aOrder - bOrder;
+): AnimatedNode[] => {
+  const svgNodes = filterGroupNodes(svg.childNodes as NodeListOf<SVGElement>);
+  const animatedNodes: AnimatedNode[] = [];
+
+  // Excalidraw's exportToSvg renders embeddable/iframe elements LAST in the
+  // SVG output, regardless of their position in the elements array. To handle
+  // this we partition SVG nodes into "regular" and "embed" pools and consume
+  // from the appropriate pool as we iterate through elements in their original
+  // (animation) order.
+  const regularNodes: SVGElement[] = [];
+  const embedNodes: SVGElement[] = [];
+  svgNodes.forEach((node) => {
+    if (isEmbedSvgNode(node)) {
+      embedNodes.push(node);
+    } else {
+      regularNodes.push(node);
+    }
   });
+
+  let regularIndex = 0;
+  let embedIndex = 0;
+
+  elements.forEach((element) => {
+    if (element.type === 'embeddable' || element.type === 'iframe') {
+      const node = embedNodes[embedIndex];
+      if (!node) return;
+      animatedNodes.push({ node, element, placeholderNodes: [] });
+      embedIndex += 1;
+      return;
+    }
+
+    const node = regularNodes[regularIndex];
+    if (!node) return;
+    animatedNodes.push({ node, element, placeholderNodes: [] });
+    regularIndex += 1;
+  });
+
+  return animatedNodes;
+};
+
+const sortAnimatedNodes = (nodes: readonly AnimatedNode[]) =>
+  [...nodes].sort(
+    (a, b) =>
+      extractNumberFromElement(a.element, 'animateOrder') -
+      extractNumberFromElement(b.element, 'animateOrder'),
+  );
+
+const patchAnimatedNode = (
+  svg: SVGSVGElement,
+  node: SVGElement,
+  element: NonDeletedExcalidrawElement,
+  currentMs: number,
+  durationMs: number,
+  options: AnimateOptions,
+  placeholderNodes: SVGElement[] = [],
+) => {
+  if (element.type === 'embeddable' || element.type === 'iframe') {
+    patchSvgImage(svg, node, currentMs, durationMs, placeholderNodes);
+    return;
+  }
+  patchSvgEle(svg, node, element, currentMs, durationMs, options);
+};
 
 export const animateSvg = (
   svg: SVGSVGElement,
   elements: readonly NonDeletedExcalidrawElement[],
   options: AnimateOptions = {},
 ) => {
-  const groups = createGroups(svg, elements);
+  const animatedNodes = createAnimatedNodes(svg, elements);
+  const nodeToElement = new Map(
+    animatedNodes.map(({ node, element }) => [node, element] as const),
+  );
+  const nodeToPlaceholders = new Map(
+    animatedNodes.map(({ node, placeholderNodes }) => [node, placeholderNodes]),
+  );
+  const groups = createGroups(nodeToElement, elements);
   const finished = new Map();
   let current = options.startMs ?? 1000; // 1 sec margin
   const individualDur = options.defaultDuration ?? 500;
   const groupDur = individualDur * 10;
-  const groupNodes = filterGroupNodes(svg.childNodes as NodeListOf<SVGElement>);
-
-  const count = Math.min(groupNodes.length, elements.length);
-  const groupElement2Element = new Map(
-    groupNodes.slice(0, count).map((ele, index) => [ele, elements[index]]),
-  );
-
-  const sortedNodes = sortSvgNodes(groupNodes.slice(0, count), elements);
+  const sortedNodes = sortAnimatedNodes(animatedNodes);
 
   // Compute raw duration for all elements first
   let unscaledTotalMs = 0;
   const elementRawDurations = new Map<SVGElement, number>();
 
-  sortedNodes.forEach((ele) => {
-    const element = groupElement2Element.get(
-      ele,
-    ) as NonDeletedExcalidrawElement;
-    if (!element) return;
+  sortedNodes.forEach(({ node: ele, element }) => {
     const { groupIds = [] } = element;
     if (!elementRawDurations.has(ele)) {
       if (groupIds.length >= 1) {
@@ -718,7 +768,7 @@ export const animateSvg = (
         elementRawDurations.set(ele, dur);
         unscaledTotalMs += dur;
         group.forEach(([childEle]) => {
-          const childElement = groupElement2Element.get(childEle);
+          const childElement = nodeToElement.get(childEle);
           if (childElement) {
             const childDur =
               extractNumberFromElement(childElement, 'animateDuration') ||
@@ -745,13 +795,9 @@ export const animateSvg = (
       : 1;
 
   // Re-create groups mapping for actual patching loop
-  const patchGroups = createGroups(svg, elements);
+  const patchGroups = createGroups(nodeToElement, elements);
 
-  sortedNodes.forEach((ele) => {
-    const element = groupElement2Element.get(
-      ele,
-    ) as NonDeletedExcalidrawElement;
-    if (!element) return;
+  sortedNodes.forEach(({ node: ele, element, placeholderNodes }) => {
     const { groupIds = [] } = element;
     if (!finished.has(ele)) {
       if (groupIds.length >= 1) {
@@ -759,7 +805,15 @@ export const animateSvg = (
         const group = patchGroups[groupId] || [];
         const rawDur = elementRawDurations.get(ele) || individualDur;
         const dur = rawDur * scale;
-        patchSvgEle(svg, ele, element, current, dur, options);
+        patchAnimatedNode(
+          svg,
+          ele,
+          element,
+          current,
+          dur,
+          options,
+          nodeToPlaceholders.get(ele),
+        );
         current += dur;
         finished.set(ele, true);
         group.forEach(([childEle, childIndex]) => {
@@ -769,13 +823,14 @@ export const animateSvg = (
               elementRawDurations.get(childEle) || individualDur;
             const childDur = childRawDur * scale;
             if (!finished.has(childEle)) {
-              patchSvgEle(
+              patchAnimatedNode(
                 svg,
                 childEle,
                 childElement,
                 current,
                 childDur,
                 options,
+                nodeToPlaceholders.get(childEle),
               );
               current += childDur;
               finished.set(childEle, true);
@@ -786,21 +841,20 @@ export const animateSvg = (
       } else {
         const rawDur = elementRawDurations.get(ele) || individualDur;
         const dur = rawDur * scale;
-        patchSvgEle(svg, ele, element, current, dur, options);
+        patchAnimatedNode(
+          svg,
+          ele,
+          element,
+          current,
+          dur,
+          options,
+          placeholderNodes,
+        );
         current += dur;
         finished.set(ele, true);
       }
     }
   });
-
-  for (let i = count; i < groupNodes.length; i++) {
-    const ele = groupNodes[i];
-    if (!finished.has(ele)) {
-      patchSvgImage(svg, ele, current, individualDur);
-      current += individualDur;
-      finished.set(ele, true);
-    }
-  }
 
   const finishedMs = current + 1000; // 1 sec margin
   return { finishedMs };

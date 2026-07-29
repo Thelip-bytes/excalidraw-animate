@@ -31,14 +31,58 @@ const fixForeignObjects = (svg: SVGSVGElement) => {
 
     // Find the embed URL from the parent <a> tag
     const parentAnchor = fo.closest('a');
+    const anchorUrl = parentAnchor?.getAttribute('href') || '';
 
     // Check if the existing content is broken
     const existingIframe = fo.querySelector('iframe');
 
-    const embedUrl =
-      parentAnchor?.getAttribute('href') ||
-      existingIframe?.getAttribute('src') ||
-      '';
+    const embedUrl = anchorUrl || existingIframe?.getAttribute('src') || '';
+
+    // A Giphy embed page is not reliable inside an inline SVG foreignObject.
+    // Use the actual GIF asset instead, which SVG can display and animate.
+    const giphyMatch = embedUrl.match(
+      /giphy\.com\/(?:clips|embed|gifs)\/[a-zA-Z0-9]*?-?([a-zA-Z0-9]+)(?:[^a-zA-Z0-9]|$)/,
+    );
+    if (giphyMatch) {
+      // Prefer SVG attribute dimensions (proper coordinate-space values)
+      // over CSS styles which may contain 'px' or '%'
+      const rawW = fo.getAttribute('width') || fo.style.width || '100%';
+      const rawH = fo.getAttribute('height') || fo.style.height || '100%';
+      // Strip 'px' suffix for clean SVG attribute values
+      const w = String(rawW).replace(/px$/i, '');
+      const h = String(rawH).replace(/px$/i, '');
+      const x = fo.getAttribute('x') || '0';
+      const y = fo.getAttribute('y') || '0';
+
+      const image = document.createElementNS(
+        svg.namespaceURI,
+        'image',
+      ) as SVGImageElement;
+      image.setAttribute('href', `https://i.giphy.com/${giphyMatch[1]}.gif`);
+      image.setAttribute('x', x);
+      image.setAttribute('y', y);
+      image.setAttribute('width', w);
+      image.setAttribute('height', h);
+      image.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+      image.style.overflow = 'hidden';
+      fo.parentNode?.replaceChild(image, fo);
+      return;
+    }
+
+    // The exporter wraps every linked embeddable in an SVG <a>. Browsers can
+    // render its fallback label but not reliably load an HTML iframe nested in
+    // that link when the SVG is mounted inline. Keep the drawable <g>, but
+    // remove just this wrapper around the live media node.
+    if (
+      parentAnchor &&
+      parentAnchor.parentNode &&
+      parentAnchor.children.length === 1
+    ) {
+      parentAnchor.parentNode.replaceChild(
+        parentAnchor.children[0],
+        parentAnchor,
+      );
+    }
 
     // If there's already a working iframe with a src, skip
     if (
@@ -76,11 +120,6 @@ const fixForeignObjects = (svg: SVGSVGElement) => {
       iframe.style.height = '100%';
       iframe.style.border = 'none';
       iframe.setAttribute('allowfullscreen', '');
-      iframe.setAttribute(
-        'sandbox',
-        'allow-scripts allow-same-origin allow-popups allow-presentation',
-      );
-      iframe.setAttribute('loading', 'lazy');
       div.appendChild(iframe);
     }
 
