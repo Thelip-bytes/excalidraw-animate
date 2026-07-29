@@ -543,18 +543,6 @@ const patchSvgFreedraw = (
   }
 };
 
-const isIframeLikeElement = (el: NonDeletedExcalidrawElement) =>
-  el.type === 'embeddable' ||
-  (el as unknown as { type: string }).type === 'iframe';
-
-const getSvgOrderedElements = (
-  elements: readonly NonDeletedExcalidrawElement[],
-) => {
-  const nonIframe = elements.filter((el) => !isIframeLikeElement(el));
-  const iframeLike = elements.filter((el) => isIframeLikeElement(el));
-  return [...nonIframe, ...iframeLike];
-};
-
 const patchSvgImage = (
   svg: SVGSVGElement,
   ele: SVGElement,
@@ -715,22 +703,19 @@ export const animateSvg = (
   elements: readonly NonDeletedExcalidrawElement[],
   options: AnimateOptions = {},
 ) => {
-  const orderedElements = getSvgOrderedElements(elements);
-  const groups = createGroups(svg, orderedElements);
+  const groups = createGroups(svg, elements);
   const finished = new Map();
   let current = options.startMs ?? 1000; // 1 sec margin
   const individualDur = options.defaultDuration ?? 500;
   const groupDur = individualDur * 10;
   const groupNodes = filterGroupNodes(svg.childNodes as NodeListOf<SVGElement>);
 
-  const count = Math.min(groupNodes.length, orderedElements.length);
+  const count = Math.min(groupNodes.length, elements.length);
   const groupElement2Element = new Map(
-    groupNodes
-      .slice(0, count)
-      .map((ele, index) => [ele, orderedElements[index]]),
+    groupNodes.slice(0, count).map((ele, index) => [ele, elements[index]]),
   );
 
-  const sortedNodes = sortSvgNodes(groupNodes.slice(0, count), orderedElements);
+  const sortedNodes = sortSvgNodes(groupNodes.slice(0, count), elements);
 
   // Compute raw duration for all elements first
   let unscaledTotalMs = 0;
@@ -779,7 +764,7 @@ export const animateSvg = (
       : 1;
 
   // Re-create groups mapping for actual patching loop
-  const patchGroups = createGroups(svg, orderedElements);
+  const patchGroups = createGroups(svg, elements);
 
   sortedNodes.forEach((ele) => {
     const element = groupElement2Element.get(
@@ -797,7 +782,7 @@ export const animateSvg = (
         current += dur;
         finished.set(ele, true);
         group.forEach(([childEle, childIndex]) => {
-          const childElement = orderedElements[childIndex];
+          const childElement = elements[childIndex];
           if (childElement) {
             const childRawDur =
               elementRawDurations.get(childEle) || individualDur;
