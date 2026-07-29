@@ -31,10 +31,14 @@ const fixForeignObjects = (svg: SVGSVGElement) => {
 
     // Find the embed URL from the parent <a> tag
     const parentAnchor = fo.closest('a');
-    const embedUrl = parentAnchor?.getAttribute('href') || '';
 
     // Check if the existing content is broken
     const existingIframe = fo.querySelector('iframe');
+
+    const embedUrl =
+      parentAnchor?.getAttribute('href') ||
+      existingIframe?.getAttribute('src') ||
+      '';
 
     // If there's already a working iframe with a src, skip
     if (
